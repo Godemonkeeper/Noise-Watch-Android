@@ -18,10 +18,6 @@ import kotlin.math.PI
 import kotlin.math.exp
 import kotlin.math.sin
 
-/**
- * Plays either a user-selected local audio file (via SAF Uri) or a built-in synthesized chime.
- * Supports immediate one-tap stop control.
- */
 class AlertPlayer(private val context: Context) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -47,8 +43,8 @@ class AlertPlayer(private val context: Context) {
             val mp = MediaPlayer().apply {
                 setAudioAttributes(
                     AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_ALARM)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
                         .build()
                 )
                 setDataSource(context, uri)
@@ -78,7 +74,6 @@ class AlertPlayer(private val context: Context) {
             val numSamples = (sampleRate * durationSec).toInt()
             val pcm = ShortArray(numSamples)
 
-            // Two-tone chime: 880 Hz followed by 1174.66 Hz (D6) with smooth exponential decay
             for (i in 0 until numSamples) {
                 val t = i.toDouble() / sampleRate
                 val freq = if (t < 0.35) 880.0 else 1174.66
@@ -98,8 +93,8 @@ class AlertPlayer(private val context: Context) {
                 val track = AudioTrack.Builder()
                     .setAudioAttributes(
                         AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_ALARM)
-                            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                            .setUsage(AudioAttributes.USAGE_MEDIA)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
                             .build()
                     )
                     .setAudioFormat(
@@ -122,7 +117,6 @@ class AlertPlayer(private val context: Context) {
                     Thread.sleep(50L)
                 }
             } catch (_: Exception) {
-                // Ignore playback interruption
             } finally {
                 releaseBuiltInTrack()
                 _isPlaying.value = false
