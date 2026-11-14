@@ -18,6 +18,11 @@ import kotlin.math.PI
 import kotlin.math.exp
 import kotlin.math.sin
 
+/**
+ * Plays either a user-selected local audio file (via SAF Uri) or a built-in synthesized chime.
+ * Uses USAGE_MEDIA + CONTENT_TYPE_MUSIC so audio routes strictly to the active output device
+ * (e.g., Bluetooth speaker) instead of dual-playing through the phone speaker and Bluetooth.
+ */
 class AlertPlayer(private val context: Context) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)

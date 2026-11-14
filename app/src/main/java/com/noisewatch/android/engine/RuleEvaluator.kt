@@ -28,7 +28,6 @@ class RuleEvaluator(
         val windowMs = settings.timeWindowSec.coerceAtLeast(1) * 1000L
         val cooldownMs = settings.cooldownSec.coerceAtLeast(0) * 1000L
 
-        // Prune expired hits outside the sliding window
         while (hitTimestamps.isNotEmpty() && nowMs - hitTimestamps.first() > windowMs) {
             hitTimestamps.removeFirst()
         }
@@ -41,7 +40,6 @@ class RuleEvaluator(
             0
         }
 
-        // Count hit if above threshold and past per-hit debounce gap
         if (!inCooldown && effectiveDb >= settings.thresholdDb && (nowMs - lastHitMs) >= minHitGapMs) {
             hitTimestamps.addLast(nowMs)
             lastHitMs = nowMs
@@ -63,5 +61,46 @@ class RuleEvaluator(
                 cooldownRemainingSec = cooldownRemaining
             )
         }
+    }
+}
+
+/**
+ * Escalates to enhanced audio if 3 triggers occur within 10 seconds,
+ * and reverts to normal audio after 10 seconds with no triggers.
+ */
+class AlertEscalationTracker(
+    private val escalationWindowMs: Long = 10_000L,
+    private val escalationTriggerCount: Int = 3,
+    private val revertIdleMs: Long = 10_000L
+) {
+    private val triggerTimestamps = ArrayDeque<Long>()
+    private var lastTriggerMs: Long = 0L
+    var isEnhancedMode: Boolean = false
+        private set
+
+    fun reset() {
+        triggerTimestamps.clear()
+        lastTriggerMs = 0L
+        isEnhancedMode = false
+    }
+
+    fun update(nowMs: Long, triggered: Boolean): Boolean {
+        if (lastTriggerMs > 0L && (nowMs - lastTriggerMs) >= revertIdleMs) {
+            isEnhancedMode = false
+            triggerTimestamps.clear()
+        }
+
+        if (triggered) {
+            lastTriggerMs = nowMs
+            triggerTimestamps.addLast(nowMs)
+            while (triggerTimestamps.isNotEmpty() && (nowMs - triggerTimestamps.first()) > escalationWindowMs) {
+                triggerTimestamps.removeFirst()
+            }
+            if (triggerTimestamps.size >= escalationTriggerCount) {
+                isEnhancedMode = true
+            }
+        }
+
+        return isEnhancedMode
     }
 }

@@ -64,6 +64,7 @@ class MainActivity : ComponentActivity() {
                 }
 
                 var devices by remember { mutableStateOf(queryInputDevices()) }
+                var pickingForEnhanced by remember { mutableStateOf(false) }
 
                 val permissionLauncher = rememberLauncherForActivityResult(
                     ActivityResultContracts.RequestMultiplePermissions()
@@ -83,10 +84,17 @@ class MainActivity : ComponentActivity() {
                             )
                         }
                         val displayName = resolveDisplayName(uri) ?: uri.lastPathSegment ?: "audio"
-                        val updated = settings.copy(
-                            customAudioUri = uri.toString(),
-                            customAudioName = displayName
-                        )
+                        val updated = if (pickingForEnhanced) {
+                            settings.copy(
+                                enhancedAudioUri = uri.toString(),
+                                enhancedAudioName = displayName
+                            )
+                        } else {
+                            settings.copy(
+                                customAudioUri = uri.toString(),
+                                customAudioName = displayName
+                            )
+                        }
                         settingsRepo.save(updated)
                         MonitorStateHolder.updateSettings(updated)
                     }
@@ -116,6 +124,7 @@ class MainActivity : ComponentActivity() {
                         devices = queryInputDevices()
                     },
                     onPickAudio = {
+                        pickingForEnhanced = false
                         audioPickerLauncher.launch(arrayOf("audio/*"))
                     },
                     onClearAudio = {
@@ -125,6 +134,18 @@ class MainActivity : ComponentActivity() {
                     },
                     onTestAlert = {
                         sendServiceAction(NoiseMonitorService.ACTION_TEST_ALERT, foreground = false)
+                    },
+                    onPickEnhancedAudio = {
+                        pickingForEnhanced = true
+                        audioPickerLauncher.launch(arrayOf("audio/*"))
+                    },
+                    onClearEnhancedAudio = {
+                        val updated = settings.copy(enhancedAudioUri = null, enhancedAudioName = null)
+                        settingsRepo.save(updated)
+                        MonitorStateHolder.updateSettings(updated)
+                    },
+                    onTestEnhancedAlert = {
+                        sendServiceAction(NoiseMonitorService.ACTION_TEST_ENHANCED_ALERT, foreground = false)
                     },
                     onStopAlert = {
                         sendServiceAction(NoiseMonitorService.ACTION_STOP_ALERT, foreground = false)

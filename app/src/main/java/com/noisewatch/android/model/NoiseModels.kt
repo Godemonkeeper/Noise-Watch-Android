@@ -25,6 +25,8 @@ data class MonitorSettings(
     val cooldownSec: Int = 30,
     val customAudioUri: String? = null,
     val customAudioName: String? = null,
+    val enhancedAudioUri: String? = null,
+    val enhancedAudioName: String? = null,
     val language: AppLanguage = AppLanguage.ZH
 )
 
@@ -67,6 +69,7 @@ data class TriggerEvent(
 data class MonitorState(
     val isMonitoring: Boolean = false,
     val isAlertPlaying: Boolean = false,
+    val isEnhancedAlertActive: Boolean = false,
     val levels: BandLevels = BandLevels(),
     val effectiveDb: Float = -100f,
     val activeHitsInWindow: Int = 0,

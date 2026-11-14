@@ -35,6 +35,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -82,6 +83,9 @@ fun NoiseWatchScreen(
     onPickAudio: () -> Unit,
     onClearAudio: () -> Unit,
     onTestAlert: () -> Unit,
+    onPickEnhancedAudio: () -> Unit,
+    onClearEnhancedAudio: () -> Unit,
+    onTestEnhancedAlert: () -> Unit,
     onStopAlert: () -> Unit,
     onStartMonitoring: () -> Unit,
     onStopMonitoring: () -> Unit,
@@ -408,19 +412,46 @@ fun NoiseWatchScreen(
                 }
             }
 
-            // 5. Local Alert Audio & Stop Control
+            // 5. Local Alert Audio (Normal + Enhanced) & Stop Control
             Card {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = s.alertSectionTitle,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold
+                        )
+                        if (state.isEnhancedAlertActive) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.error,
+                                shape = RoundedCornerShape(50)
+                            ) {
+                                Text(
+                                    text = s.enhancedModeBadge,
+                                    color = MaterialTheme.colorScheme.onError,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                )
+                            }
+                        }
+                    }
+
                     Text(
-                        text = s.alertSectionTitle,
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold
+                        text = s.escalationHint,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+
+                    // Normal Audio Row
                     Text(
-                        text = "${s.currentAlertAudio}: ${settings.customAudioName ?: s.builtInDefaultAudio}",
+                        text = "${s.normalAudioLabel}: ${settings.customAudioName ?: s.builtInDefaultAudio}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 2,
+                        maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                     FlowRow(
@@ -442,15 +473,48 @@ fun NoiseWatchScreen(
                             Spacer(Modifier.width(4.dp))
                             Text(s.testAlert)
                         }
-                        Button(
-                            onClick = onStopAlert,
-                            enabled = state.isAlertPlaying,
-                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
-                        ) {
-                            Icon(Icons.Default.Stop, contentDescription = null)
+                    }
+
+                    HorizontalDivider()
+
+                    // Enhanced Audio Row
+                    Text(
+                        text = "${s.enhancedAudioLabel}: ${settings.enhancedAudioName ?: s.builtInDefaultAudio}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(onClick = onPickEnhancedAudio) {
+                            Icon(Icons.Default.AudioFile, contentDescription = null)
                             Spacer(Modifier.width(4.dp))
-                            Text(s.stopAlert)
+                            Text(s.chooseEnhancedAudioFile)
                         }
+                        if (settings.enhancedAudioUri != null) {
+                            OutlinedButton(onClick = onClearEnhancedAudio) {
+                                Text(s.clearAudioFile)
+                            }
+                        }
+                        OutlinedButton(onClick = onTestEnhancedAlert) {
+                            Icon(Icons.Default.PlayArrow, contentDescription = null)
+                            Spacer(Modifier.width(4.dp))
+                            Text(s.testAlert)
+                        }
+                    }
+
+                    Button(
+                        onClick = onStopAlert,
+                        enabled = state.isAlertPlaying,
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.Stop, contentDescription = null)
+                        Spacer(Modifier.width(4.dp))
+                        Text(s.stopAlert)
                     }
                 }
             }

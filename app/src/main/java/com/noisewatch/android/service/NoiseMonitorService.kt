@@ -24,6 +24,7 @@ import androidx.core.content.ContextCompat
 import com.noisewatch.android.MainActivity
 import com.noisewatch.android.audio.AlertPlayer
 import com.noisewatch.android.dsp.FftAnalyzer
+import com.noisewatch.android.engine.AlertEscalationTracker
 import com.noisewatch.android.engine.RuleEvaluator
 import com.noisewatch.android.model.AppLanguage
 import com.noisewatch.android.model.TriggerEvent
@@ -34,6 +35,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.isActive
@@ -47,10 +49,14 @@ class NoiseMonitorService : Service() {
     private var alertObserverJob: Job? = null
     private var wakeLock: PowerManager.WakeLock? = null
 
+    @Volatile
+    private var activeAudioRecord: AudioRecord? = null
+
     private lateinit var settingsRepo: SettingsRepository
     private lateinit var exporter: EventExporter
     private lateinit var alertPlayer: AlertPlayer
     private val ruleEvaluator = RuleEvaluator()
+    private val escalationTracker = AlertEscalationTracker()
     private val allEvents = mutableListOf<TriggerEvent>()
     private var nextEventId = 1L
 
@@ -83,6 +89,10 @@ class NoiseMonitorService : Service() {
             ACTION_STOP -> stopMonitoring()
             ACTION_STOP_ALERT -> alertPlayer.stop()
             ACTION_TEST_ALERT -> alertPlayer.play(MonitorStateHolder.settings.value.customAudioUri)
+            ACTION_TEST_ENHANCED_ALERT -> {
+                val s = MonitorStateHolder.settings.value
+                alertPlayer.play(s.enhancedAudioUri ?: s.customAudioUri)
+            }
             ACTION_EXPORT_CSV -> exportCsvNow()
         }
         return START_STICKY
@@ -108,9 +118,14 @@ class NoiseMonitorService : Service() {
         ServiceCompat.startForeground(this, NOTIFICATION_ID, buildNotification(), fgsType)
         acquireWakeLock()
         ruleEvaluator.reset()
+        escalationTracker.reset()
 
         MonitorStateHolder.updateState {
-            it.copy(isMonitoring = true, errorMessage = null)
+            it.copy(
+                isMonitoring = true,
+                isEnhancedAlertActive = false,
+                errorMessage = null
+            )
         }
 
         monitorJob = serviceScope.launch {
@@ -118,7 +133,7 @@ class NoiseMonitorService : Service() {
         }
 
         csvJob = serviceScope.launch {
-            while (isActive) {
+            while (currentCoroutineContext().isActive) {
                 delay(CSV_EXPORT_INTERVAL_MS)
                 exportCsvNow()
             }
@@ -175,6 +190,7 @@ class NoiseMonitorService : Service() {
             return
         }
 
+        activeAudioRecord = audioRecord
         applyPreferredInputDevice(audioRecord, MonitorStateHolder.settings.value.selectedDeviceId)
 
         val buffer = ShortArray(fftAnalyzer.fftSize)
@@ -183,7 +199,7 @@ class NoiseMonitorService : Service() {
 
         try {
             audioRecord.startRecording()
-            while (serviceScope.isActive && MonitorStateHolder.state.value.isMonitoring) {
+            while (currentCoroutineContext().isActive && MonitorStateHolder.state.value.isMonitoring) {
                 val currentSettings = MonitorStateHolder.settings.value
                 if (currentSettings.selectedDeviceId != lastDeviceId) {
                     lastDeviceId = currentSettings.selectedDeviceId
@@ -191,17 +207,29 @@ class NoiseMonitorService : Service() {
                 }
 
                 val read = audioRecord.read(buffer, 0, buffer.size)
+                if (!currentCoroutineContext().isActive || !MonitorStateHolder.state.value.isMonitoring) {
+                    break
+                }
+
                 if (read > 0) {
                     val levels = fftAnalyzer.analyze(buffer, read)
                     val effectiveDb = levels.effectiveDb(currentSettings.selectedBands)
                     val nowMs = System.currentTimeMillis()
                     val eval = ruleEvaluator.evaluate(nowMs, effectiveDb, currentSettings)
+                    val isEnhancedMode = escalationTracker.update(nowMs, eval.triggered)
 
                     if (eval.triggered) {
-                        val alertMode = if (!currentSettings.customAudioUri.isNullOrBlank()) {
-                            currentSettings.customAudioName ?: "Custom Audio"
+                        val targetUri = if (isEnhancedMode) {
+                            currentSettings.enhancedAudioUri ?: currentSettings.customAudioUri
                         } else {
-                            "Built-in Default"
+                            currentSettings.customAudioUri
+                        }
+                        val alertMode = if (isEnhancedMode) {
+                            "[Enhanced] " + (currentSettings.enhancedAudioName
+                                ?: currentSettings.customAudioName
+                                ?: "Built-in Default")
+                        } else {
+                            currentSettings.customAudioName ?: "Built-in Default"
                         }
                         val event = TriggerEvent(
                             id = nextEventId++,
@@ -223,33 +251,38 @@ class NoiseMonitorService : Service() {
                                 allEvents.removeAt(allEvents.lastIndex)
                             }
                         }
-                        alertPlayer.play(currentSettings.customAudioUri)
+                        alertPlayer.play(targetUri)
                     }
 
                     val snapshotEvents = synchronized(allEvents) { allEvents.take(50) }
-                    val updatedState = MonitorStateHolder.state.value.copy(
-                        isMonitoring = true,
-                        levels = levels,
-                        effectiveDb = effectiveDb,
-                        activeHitsInWindow = eval.activeHitsInWindow,
-                        cooldownRemainingSec = eval.cooldownRemainingSec,
-                        recentEvents = snapshotEvents,
-                        totalTriggerCount = if (eval.triggered) {
-                            MonitorStateHolder.state.value.totalTriggerCount + 1
+                    MonitorStateHolder.updateState { current ->
+                        if (!current.isMonitoring) {
+                            current
                         } else {
-                            MonitorStateHolder.state.value.totalTriggerCount
+                            current.copy(
+                                isEnhancedAlertActive = isEnhancedMode,
+                                levels = levels,
+                                effectiveDb = effectiveDb,
+                                activeHitsInWindow = eval.activeHitsInWindow,
+                                cooldownRemainingSec = eval.cooldownRemainingSec,
+                                recentEvents = snapshotEvents,
+                                totalTriggerCount = if (eval.triggered) {
+                                    current.totalTriggerCount + 1
+                                } else {
+                                    current.totalTriggerCount
+                                }
+                            )
                         }
-                    )
-                    MonitorStateHolder.updateState { updatedState }
+                    }
 
-                    // Real-time JSON snapshot overwrite (on trigger or every ~500ms)
                     if (eval.triggered || nowMs - lastJsonWriteMs >= 500L) {
                         lastJsonWriteMs = nowMs
-                        exporter.writeJsonSnapshot(updatedState, currentSettings)
+                        exporter.writeJsonSnapshot(MonitorStateHolder.state.value, currentSettings)
                     }
                 }
             }
         } finally {
+            activeAudioRecord = null
             runCatching {
                 if (audioRecord.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
                     audioRecord.stop()
@@ -278,12 +311,25 @@ class NoiseMonitorService : Service() {
 
     private fun stopMonitoring() {
         MonitorStateHolder.updateState {
-            it.copy(isMonitoring = false, activeHitsInWindow = 0, cooldownRemainingSec = 0)
+            it.copy(
+                isMonitoring = false,
+                isEnhancedAlertActive = false,
+                activeHitsInWindow = 0,
+                cooldownRemainingSec = 0
+            )
         }
+        escalationTracker.reset()
         monitorJob?.cancel()
         monitorJob = null
         csvJob?.cancel()
         csvJob = null
+        runCatching {
+            activeAudioRecord?.let {
+                if (it.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+                    it.stop()
+                }
+            }
+        }
         releaseWakeLock()
         exporter.writeJsonSnapshot(MonitorStateHolder.state.value, MonitorStateHolder.settings.value)
         exportCsvNow()
@@ -350,6 +396,7 @@ class NoiseMonitorService : Service() {
         const val ACTION_STOP = "com.noisewatch.android.STOP"
         const val ACTION_STOP_ALERT = "com.noisewatch.android.STOP_ALERT"
         const val ACTION_TEST_ALERT = "com.noisewatch.android.TEST_ALERT"
+        const val ACTION_TEST_ENHANCED_ALERT = "com.noisewatch.android.TEST_ENHANCED_ALERT"
         const val ACTION_EXPORT_CSV = "com.noisewatch.android.EXPORT_CSV"
     }
 }

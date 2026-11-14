@@ -31,6 +31,8 @@ class SettingsRepository(context: Context) {
             cooldownSec = prefs.getInt(KEY_COOLDOWN_SEC, 30).coerceIn(0, 300),
             customAudioUri = prefs.getString(KEY_CUSTOM_AUDIO_URI, null),
             customAudioName = prefs.getString(KEY_CUSTOM_AUDIO_NAME, null),
+            enhancedAudioUri = prefs.getString(KEY_ENHANCED_AUDIO_URI, null),
+            enhancedAudioName = prefs.getString(KEY_ENHANCED_AUDIO_NAME, null),
             language = language
         )
     }
@@ -49,6 +51,8 @@ class SettingsRepository(context: Context) {
             putInt(KEY_COOLDOWN_SEC, settings.cooldownSec)
             putString(KEY_CUSTOM_AUDIO_URI, settings.customAudioUri)
             putString(KEY_CUSTOM_AUDIO_NAME, settings.customAudioName)
+            putString(KEY_ENHANCED_AUDIO_URI, settings.enhancedAudioUri)
+            putString(KEY_ENHANCED_AUDIO_NAME, settings.enhancedAudioName)
             putString(KEY_LANGUAGE, settings.language.name)
             apply()
         }
@@ -63,6 +67,8 @@ class SettingsRepository(context: Context) {
         private const val KEY_COOLDOWN_SEC = "cooldown_sec"
         private const val KEY_CUSTOM_AUDIO_URI = "custom_audio_uri"
         private const val KEY_CUSTOM_AUDIO_NAME = "custom_audio_name"
+        private const val KEY_ENHANCED_AUDIO_URI = "enhanced_audio_uri"
+        private const val KEY_ENHANCED_AUDIO_NAME = "enhanced_audio_name"
         private const val KEY_LANGUAGE = "language"
     }
 }
