@@ -33,6 +33,10 @@ class SettingsRepository(context: Context) {
             customAudioName = prefs.getString(KEY_CUSTOM_AUDIO_NAME, null),
             enhancedAudioUri = prefs.getString(KEY_ENHANCED_AUDIO_URI, null),
             enhancedAudioName = prefs.getString(KEY_ENHANCED_AUDIO_NAME, null),
+            keepAliveEnabled = prefs.getBoolean(KEY_KEEP_ALIVE_ENABLED, false),
+            keepAliveIntervalMin = prefs.getInt(KEY_KEEP_ALIVE_INTERVAL_MIN, 5).coerceIn(1, 30),
+            keepAliveAudioUri = prefs.getString(KEY_KEEP_ALIVE_AUDIO_URI, null),
+            keepAliveAudioName = prefs.getString(KEY_KEEP_ALIVE_AUDIO_NAME, null),
             language = language
         )
     }
@@ -53,6 +57,10 @@ class SettingsRepository(context: Context) {
             putString(KEY_CUSTOM_AUDIO_NAME, settings.customAudioName)
             putString(KEY_ENHANCED_AUDIO_URI, settings.enhancedAudioUri)
             putString(KEY_ENHANCED_AUDIO_NAME, settings.enhancedAudioName)
+            putBoolean(KEY_KEEP_ALIVE_ENABLED, settings.keepAliveEnabled)
+            putInt(KEY_KEEP_ALIVE_INTERVAL_MIN, settings.keepAliveIntervalMin)
+            putString(KEY_KEEP_ALIVE_AUDIO_URI, settings.keepAliveAudioUri)
+            putString(KEY_KEEP_ALIVE_AUDIO_NAME, settings.keepAliveAudioName)
             putString(KEY_LANGUAGE, settings.language.name)
             apply()
         }
@@ -69,6 +77,10 @@ class SettingsRepository(context: Context) {
         private const val KEY_CUSTOM_AUDIO_NAME = "custom_audio_name"
         private const val KEY_ENHANCED_AUDIO_URI = "enhanced_audio_uri"
         private const val KEY_ENHANCED_AUDIO_NAME = "enhanced_audio_name"
+        private const val KEY_KEEP_ALIVE_ENABLED = "keep_alive_enabled"
+        private const val KEY_KEEP_ALIVE_INTERVAL_MIN = "keep_alive_interval_min"
+        private const val KEY_KEEP_ALIVE_AUDIO_URI = "keep_alive_audio_uri"
+        private const val KEY_KEEP_ALIVE_AUDIO_NAME = "keep_alive_audio_name"
         private const val KEY_LANGUAGE = "language"
     }
 }

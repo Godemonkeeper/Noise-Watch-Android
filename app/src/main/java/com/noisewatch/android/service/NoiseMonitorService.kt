@@ -93,6 +93,9 @@ class NoiseMonitorService : Service() {
                 val s = MonitorStateHolder.settings.value
                 alertPlayer.play(s.enhancedAudioUri ?: s.customAudioUri)
             }
+            ACTION_TEST_KEEP_ALIVE_ALERT -> {
+                alertPlayer.playKeepAlive(MonitorStateHolder.settings.value.keepAliveAudioUri, force = true)
+            }
             ACTION_EXPORT_CSV -> exportCsvNow()
         }
         return START_STICKY
@@ -196,6 +199,7 @@ class NoiseMonitorService : Service() {
         val buffer = ShortArray(fftAnalyzer.fftSize)
         var lastDeviceId = MonitorStateHolder.settings.value.selectedDeviceId
         var lastJsonWriteMs = 0L
+        var lastAudioActivityMs = System.currentTimeMillis()
 
         try {
             audioRecord.startRecording()
@@ -251,7 +255,14 @@ class NoiseMonitorService : Service() {
                                 allEvents.removeAt(allEvents.lastIndex)
                             }
                         }
+                        lastAudioActivityMs = nowMs
                         alertPlayer.play(targetUri)
+                    } else if (currentSettings.keepAliveEnabled && !alertPlayer.isPlaying.value) {
+                        val keepAliveMs = currentSettings.keepAliveIntervalMin.coerceAtLeast(1) * 60_000L
+                        if (nowMs - lastAudioActivityMs >= keepAliveMs) {
+                            lastAudioActivityMs = nowMs
+                            alertPlayer.playKeepAlive(currentSettings.keepAliveAudioUri)
+                        }
                     }
 
                     val snapshotEvents = synchronized(allEvents) { allEvents.take(50) }
@@ -397,6 +408,7 @@ class NoiseMonitorService : Service() {
         const val ACTION_STOP_ALERT = "com.noisewatch.android.STOP_ALERT"
         const val ACTION_TEST_ALERT = "com.noisewatch.android.TEST_ALERT"
         const val ACTION_TEST_ENHANCED_ALERT = "com.noisewatch.android.TEST_ENHANCED_ALERT"
+        const val ACTION_TEST_KEEP_ALIVE_ALERT = "com.noisewatch.android.TEST_KEEP_ALIVE_ALERT"
         const val ACTION_EXPORT_CSV = "com.noisewatch.android.EXPORT_CSV"
     }
 }

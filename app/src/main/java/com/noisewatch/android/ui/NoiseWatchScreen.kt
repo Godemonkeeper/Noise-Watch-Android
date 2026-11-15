@@ -44,6 +44,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -86,6 +87,9 @@ fun NoiseWatchScreen(
     onPickEnhancedAudio: () -> Unit,
     onClearEnhancedAudio: () -> Unit,
     onTestEnhancedAlert: () -> Unit,
+    onPickKeepAliveAudio: () -> Unit,
+    onClearKeepAliveAudio: () -> Unit,
+    onTestKeepAliveAlert: () -> Unit,
     onStopAlert: () -> Unit,
     onStartMonitoring: () -> Unit,
     onStopMonitoring: () -> Unit,
@@ -412,7 +416,7 @@ fun NoiseWatchScreen(
                 }
             }
 
-            // 5. Local Alert Audio (Normal + Enhanced) & Stop Control
+            // 5. Local Alert Audio (Normal + Enhanced + Bluetooth Keep-Alive) & Stop Control
             Card {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(
@@ -503,6 +507,74 @@ fun NoiseWatchScreen(
                             Icon(Icons.Default.PlayArrow, contentDescription = null)
                             Spacer(Modifier.width(4.dp))
                             Text(s.testAlert)
+                        }
+                    }
+
+                    HorizontalDivider()
+
+                    // Bluetooth Speaker Keep-Alive Toggle, Interval & Audio Picker
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                            Text(
+                                text = s.keepAliveTitle,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium
+                            )
+                            Text(
+                                text = s.keepAliveDesc,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = settings.keepAliveEnabled,
+                            onCheckedChange = { enabled ->
+                                onUpdateSettings(settings.copy(keepAliveEnabled = enabled))
+                            }
+                        )
+                    }
+
+                    if (settings.keepAliveEnabled) {
+                        RuleSlider(
+                            label = s.keepAliveIntervalLabel,
+                            valueText = "${settings.keepAliveIntervalMin} ${s.minUnit}",
+                            value = settings.keepAliveIntervalMin.toFloat(),
+                            valueRange = 1f..30f,
+                            onValueChange = {
+                                onUpdateSettings(settings.copy(keepAliveIntervalMin = it.roundToInt()))
+                            }
+                        )
+
+                        Text(
+                            text = "${s.keepAliveAudioLabel}: ${settings.keepAliveAudioName ?: s.builtInKeepAliveAudio}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedButton(onClick = onPickKeepAliveAudio) {
+                                Icon(Icons.Default.AudioFile, contentDescription = null)
+                                Spacer(Modifier.width(4.dp))
+                                Text(s.chooseKeepAliveAudioFile)
+                            }
+                            if (settings.keepAliveAudioUri != null) {
+                                OutlinedButton(onClick = onClearKeepAliveAudio) {
+                                    Text(s.clearAudioFile)
+                                }
+                            }
+                            OutlinedButton(onClick = onTestKeepAliveAlert) {
+                                Icon(Icons.Default.PlayArrow, contentDescription = null)
+                                Spacer(Modifier.width(4.dp))
+                                Text(s.testAlert)
+                            }
                         }
                     }
 

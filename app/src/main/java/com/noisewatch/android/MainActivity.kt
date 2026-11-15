@@ -30,6 +30,10 @@ import com.noisewatch.android.storage.EventExporter
 import com.noisewatch.android.storage.SettingsRepository
 import com.noisewatch.android.ui.NoiseWatchScreen
 
+private enum class AudioPickTarget {
+    NORMAL, ENHANCED, KEEP_ALIVE
+}
+
 class MainActivity : ComponentActivity() {
 
     private lateinit var settingsRepo: SettingsRepository
@@ -64,7 +68,7 @@ class MainActivity : ComponentActivity() {
                 }
 
                 var devices by remember { mutableStateOf(queryInputDevices()) }
-                var pickingForEnhanced by remember { mutableStateOf(false) }
+                var pickTarget by remember { mutableStateOf(AudioPickTarget.NORMAL) }
 
                 val permissionLauncher = rememberLauncherForActivityResult(
                     ActivityResultContracts.RequestMultiplePermissions()
@@ -84,15 +88,18 @@ class MainActivity : ComponentActivity() {
                             )
                         }
                         val displayName = resolveDisplayName(uri) ?: uri.lastPathSegment ?: "audio"
-                        val updated = if (pickingForEnhanced) {
-                            settings.copy(
+                        val updated = when (pickTarget) {
+                            AudioPickTarget.NORMAL -> settings.copy(
+                                customAudioUri = uri.toString(),
+                                customAudioName = displayName
+                            )
+                            AudioPickTarget.ENHANCED -> settings.copy(
                                 enhancedAudioUri = uri.toString(),
                                 enhancedAudioName = displayName
                             )
-                        } else {
-                            settings.copy(
-                                customAudioUri = uri.toString(),
-                                customAudioName = displayName
+                            AudioPickTarget.KEEP_ALIVE -> settings.copy(
+                                keepAliveAudioUri = uri.toString(),
+                                keepAliveAudioName = displayName
                             )
                         }
                         settingsRepo.save(updated)
@@ -124,7 +131,7 @@ class MainActivity : ComponentActivity() {
                         devices = queryInputDevices()
                     },
                     onPickAudio = {
-                        pickingForEnhanced = false
+                        pickTarget = AudioPickTarget.NORMAL
                         audioPickerLauncher.launch(arrayOf("audio/*"))
                     },
                     onClearAudio = {
@@ -136,7 +143,7 @@ class MainActivity : ComponentActivity() {
                         sendServiceAction(NoiseMonitorService.ACTION_TEST_ALERT, foreground = false)
                     },
                     onPickEnhancedAudio = {
-                        pickingForEnhanced = true
+                        pickTarget = AudioPickTarget.ENHANCED
                         audioPickerLauncher.launch(arrayOf("audio/*"))
                     },
                     onClearEnhancedAudio = {
@@ -146,6 +153,18 @@ class MainActivity : ComponentActivity() {
                     },
                     onTestEnhancedAlert = {
                         sendServiceAction(NoiseMonitorService.ACTION_TEST_ENHANCED_ALERT, foreground = false)
+                    },
+                    onPickKeepAliveAudio = {
+                        pickTarget = AudioPickTarget.KEEP_ALIVE
+                        audioPickerLauncher.launch(arrayOf("audio/*"))
+                    },
+                    onClearKeepAliveAudio = {
+                        val updated = settings.copy(keepAliveAudioUri = null, keepAliveAudioName = null)
+                        settingsRepo.save(updated)
+                        MonitorStateHolder.updateSettings(updated)
+                    },
+                    onTestKeepAliveAlert = {
+                        sendServiceAction(NoiseMonitorService.ACTION_TEST_KEEP_ALIVE_ALERT, foreground = false)
                     },
                     onStopAlert = {
                         sendServiceAction(NoiseMonitorService.ACTION_STOP_ALERT, foreground = false)

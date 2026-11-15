@@ -20,6 +20,7 @@ import kotlin.math.sin
 
 /**
  * Plays either a user-selected local audio file (via SAF Uri) or a built-in synthesized chime.
+ * Also provides playKeepAlive() supporting a custom keep-alive audio file or built-in soft pulse.
  * Uses USAGE_MEDIA + CONTENT_TYPE_MUSIC so audio routes strictly to the active output device
  * (e.g., Bluetooth speaker) instead of dual-playing through the phone speaker and Bluetooth.
  */
@@ -41,6 +42,38 @@ class AlertPlayer(private val context: Context) {
             if (started) return
         }
         playBuiltInChime()
+    }
+
+    @Synchronized
+    fun playKeepAlive(keepAliveAudioUri: String?, force: Boolean = false) {
+        if (!force && _isPlaying.value) return
+        stop()
+        if (!keepAliveAudioUri.isNullOrBlank()) {
+            val started = playCustomUri(Uri.parse(keepAliveAudioUri))
+            if (started) return
+        }
+        playKeepAlivePulse()
+    }
+
+    private fun playKeepAlivePulse() {
+        _isPlaying.value = true
+        builtInJob = scope.launch {
+            val sampleRate = 44100
+            val durationSec = 0.35
+            val numSamples = (sampleRate * durationSec).toInt()
+            val pcm = ShortArray(numSamples)
+
+            for (i in 0 until numSamples) {
+                val t = i.toDouble() / sampleRate
+                val env = sin(PI * t / durationSec)
+                val sample = sin(2.0 * PI * 440.0 * t) * env * 0.15
+                pcm[i] = (sample * Short.MAX_VALUE).toInt()
+                    .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
+                    .toShort()
+            }
+
+            playPcmStatic(sampleRate, pcm, 420L)
+        }
     }
 
     private fun playCustomUri(uri: Uri): Boolean {
@@ -86,46 +119,52 @@ class AlertPlayer(private val context: Context) {
                 val attack = (localT / 0.015).coerceAtMost(1.0)
                 val decay = exp(-localT * 4.5)
                 val sample = sin(2.0 * PI * freq * t) * attack * decay * 0.65
-                pcm[i] = (sample * Short.MAX_VALUE).toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+                pcm[i] = (sample * Short.MAX_VALUE).toInt()
+                    .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
+                    .toShort()
             }
 
-            try {
-                val minBuf = AudioTrack.getMinBufferSize(
-                    sampleRate,
-                    AudioFormat.CHANNEL_OUT_MONO,
-                    AudioFormat.ENCODING_PCM_16BIT
+            playPcmStatic(sampleRate, pcm, 1300L)
+        }
+    }
+
+    private fun playPcmStatic(sampleRate: Int, pcm: ShortArray, waitMs: Long) {
+        try {
+            val minBuf = AudioTrack.getMinBufferSize(
+                sampleRate,
+                AudioFormat.CHANNEL_OUT_MONO,
+                AudioFormat.ENCODING_PCM_16BIT
+            )
+            val track = AudioTrack.Builder()
+                .setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                        .build()
                 )
-                val track = AudioTrack.Builder()
-                    .setAudioAttributes(
-                        AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_MEDIA)
-                            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                            .build()
-                    )
-                    .setAudioFormat(
-                        AudioFormat.Builder()
-                            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                            .setSampleRate(sampleRate)
-                            .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                            .build()
-                    )
-                    .setBufferSizeInBytes(maxOf(minBuf, pcm.size * 2))
-                    .setTransferMode(AudioTrack.MODE_STATIC)
-                    .build()
+                .setAudioFormat(
+                    AudioFormat.Builder()
+                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                        .setSampleRate(sampleRate)
+                        .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                        .build()
+                )
+                .setBufferSizeInBytes(maxOf(minBuf, pcm.size * 2))
+                .setTransferMode(AudioTrack.MODE_STATIC)
+                .build()
 
-                audioTrack = track
-                track.write(pcm, 0, pcm.size)
-                track.play()
+            audioTrack = track
+            track.write(pcm, 0, pcm.size)
+            track.play()
 
-                val startMs = System.currentTimeMillis()
-                while (_isPlaying.value && System.currentTimeMillis() - startMs < 1300L) {
-                    Thread.sleep(50L)
-                }
-            } catch (_: Exception) {
-            } finally {
-                releaseBuiltInTrack()
-                _isPlaying.value = false
+            val startMs = System.currentTimeMillis()
+            while (_isPlaying.value && System.currentTimeMillis() - startMs < waitMs) {
+                Thread.sleep(50L)
             }
+        } catch (_: Exception) {
+        } finally {
+            releaseBuiltInTrack()
+            _isPlaying.value = false
         }
     }
 

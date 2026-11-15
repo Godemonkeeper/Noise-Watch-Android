@@ -27,6 +27,10 @@ data class MonitorSettings(
     val customAudioName: String? = null,
     val enhancedAudioUri: String? = null,
     val enhancedAudioName: String? = null,
+    val keepAliveEnabled: Boolean = false,
+    val keepAliveIntervalMin: Int = 5,
+    val keepAliveAudioUri: String? = null,
+    val keepAliveAudioName: String? = null,
     val language: AppLanguage = AppLanguage.ZH
 )
 
