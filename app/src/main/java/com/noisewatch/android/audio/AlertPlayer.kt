@@ -55,24 +55,28 @@ class AlertPlayer(private val context: Context) {
         playKeepAlivePulse()
     }
 
+    /**
+     * Plays a 1.0s gentle pulse (440 Hz @ 30% amplitude) — long enough to survive
+     * Bluetooth A2DP wake-up latency without startling the user.
+     */
     private fun playKeepAlivePulse() {
         _isPlaying.value = true
         builtInJob = scope.launch {
             val sampleRate = 44100
-            val durationSec = 0.35
+            val durationSec = 1.0
             val numSamples = (sampleRate * durationSec).toInt()
             val pcm = ShortArray(numSamples)
 
             for (i in 0 until numSamples) {
                 val t = i.toDouble() / sampleRate
                 val env = sin(PI * t / durationSec)
-                val sample = sin(2.0 * PI * 440.0 * t) * env * 0.15
+                val sample = sin(2.0 * PI * 440.0 * t) * env * 0.30
                 pcm[i] = (sample * Short.MAX_VALUE).toInt()
                     .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
                     .toShort()
             }
 
-            playPcmStatic(sampleRate, pcm, 420L)
+            playPcmStatic(sampleRate, pcm, 1100L)
         }
     }
 

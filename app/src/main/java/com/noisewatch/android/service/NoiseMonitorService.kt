@@ -127,6 +127,7 @@ class NoiseMonitorService : Service() {
             it.copy(
                 isMonitoring = true,
                 isEnhancedAlertActive = false,
+                keepAliveRemainingSec = null,
                 errorMessage = null
             )
         }
@@ -200,6 +201,7 @@ class NoiseMonitorService : Service() {
         var lastDeviceId = MonitorStateHolder.settings.value.selectedDeviceId
         var lastJsonWriteMs = 0L
         var lastAudioActivityMs = System.currentTimeMillis()
+        var lastKeepAliveEnabled = MonitorStateHolder.settings.value.keepAliveEnabled
 
         try {
             audioRecord.startRecording()
@@ -221,6 +223,12 @@ class NoiseMonitorService : Service() {
                     val nowMs = System.currentTimeMillis()
                     val eval = ruleEvaluator.evaluate(nowMs, effectiveDb, currentSettings)
                     val isEnhancedMode = escalationTracker.update(nowMs, eval.triggered)
+
+                    // Reset keep-alive timer cleanly whenever user toggles the switch ON
+                    if (currentSettings.keepAliveEnabled && !lastKeepAliveEnabled) {
+                        lastAudioActivityMs = nowMs
+                    }
+                    lastKeepAliveEnabled = currentSettings.keepAliveEnabled
 
                     if (eval.triggered) {
                         val targetUri = if (isEnhancedMode) {
@@ -265,6 +273,14 @@ class NoiseMonitorService : Service() {
                         }
                     }
 
+                    val keepAliveRemainingSec = if (currentSettings.keepAliveEnabled) {
+                        val keepAliveMs = currentSettings.keepAliveIntervalMin.coerceAtLeast(1) * 60_000L
+                        val remMs = (keepAliveMs - (nowMs - lastAudioActivityMs)).coerceAtLeast(0L)
+                        ((remMs + 999L) / 1000L).toInt()
+                    } else {
+                        null
+                    }
+
                     val snapshotEvents = synchronized(allEvents) { allEvents.take(50) }
                     MonitorStateHolder.updateState { current ->
                         if (!current.isMonitoring) {
@@ -272,6 +288,7 @@ class NoiseMonitorService : Service() {
                         } else {
                             current.copy(
                                 isEnhancedAlertActive = isEnhancedMode,
+                                keepAliveRemainingSec = keepAliveRemainingSec,
                                 levels = levels,
                                 effectiveDb = effectiveDb,
                                 activeHitsInWindow = eval.activeHitsInWindow,
@@ -325,6 +342,7 @@ class NoiseMonitorService : Service() {
             it.copy(
                 isMonitoring = false,
                 isEnhancedAlertActive = false,
+                keepAliveRemainingSec = null,
                 activeHitsInWindow = 0,
                 cooldownRemainingSec = 0
             )

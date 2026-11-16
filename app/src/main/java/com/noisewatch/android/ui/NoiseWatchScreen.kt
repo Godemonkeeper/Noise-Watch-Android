@@ -512,7 +512,7 @@ fun NoiseWatchScreen(
 
                     HorizontalDivider()
 
-                    // Bluetooth Speaker Keep-Alive Toggle, Interval & Audio Picker
+                    // Bluetooth Speaker Keep-Alive Toggle, Countdown, Interval & Audio Picker
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -539,6 +539,42 @@ fun NoiseWatchScreen(
                     }
 
                     if (settings.keepAliveEnabled) {
+                        val rem = state.keepAliveRemainingSec
+                        Surface(
+                            color = MaterialTheme.colorScheme.secondaryContainer,
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = if (state.isMonitoring && rem != null) {
+                                        s.keepAliveCountdownLabel
+                                    } else {
+                                        s.keepAliveWaitingLabel
+                                    },
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                                )
+                                if (state.isMonitoring && rem != null) {
+                                    val mins = rem / 60
+                                    val secs = rem % 60
+                                    Text(
+                                        text = String.format(Locale.US, "%02d:%02d", mins, secs),
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontFamily = FontFamily.Monospace,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                            }
+                        }
+
                         RuleSlider(
                             label = s.keepAliveIntervalLabel,
                             valueText = "${settings.keepAliveIntervalMin} ${s.minUnit}",
