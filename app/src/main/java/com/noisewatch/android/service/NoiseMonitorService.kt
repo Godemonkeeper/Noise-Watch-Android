@@ -25,6 +25,7 @@ import com.noisewatch.android.MainActivity
 import com.noisewatch.android.audio.AlertPlayer
 import com.noisewatch.android.dsp.FftAnalyzer
 import com.noisewatch.android.engine.AlertEscalationTracker
+import com.noisewatch.android.engine.EvaluationResult
 import com.noisewatch.android.engine.RuleEvaluator
 import com.noisewatch.android.model.AppLanguage
 import com.noisewatch.android.model.TriggerEvent
@@ -202,6 +203,7 @@ class NoiseMonitorService : Service() {
         var lastJsonWriteMs = 0L
         var lastAudioActivityMs = System.currentTimeMillis()
         var lastKeepAliveEnabled = MonitorStateHolder.settings.value.keepAliveEnabled
+        var keepAliveMuteUntilMs = 0L
 
         try {
             audioRecord.startRecording()
@@ -221,10 +223,23 @@ class NoiseMonitorService : Service() {
                     val levels = fftAnalyzer.analyze(buffer, read)
                     val effectiveDb = levels.effectiveDb(currentSettings.selectedBands)
                     val nowMs = System.currentTimeMillis()
-                    val eval = ruleEvaluator.evaluate(nowMs, effectiveDb, currentSettings)
+
+                    if (alertPlayer.isKeepAlivePlaying) {
+                        keepAliveMuteUntilMs = nowMs + KEEP_ALIVE_TAIL_MUTE_MS
+                    }
+                    val suppressDetection = alertPlayer.isKeepAlivePlaying || nowMs < keepAliveMuteUntilMs
+
+                    val eval = if (suppressDetection) {
+                        EvaluationResult(
+                            triggered = false,
+                            activeHitsInWindow = MonitorStateHolder.state.value.activeHitsInWindow,
+                            cooldownRemainingSec = MonitorStateHolder.state.value.cooldownRemainingSec
+                        )
+                    } else {
+                        ruleEvaluator.evaluate(nowMs, effectiveDb, currentSettings)
+                    }
                     val isEnhancedMode = escalationTracker.update(nowMs, eval.triggered)
 
-                    // Reset keep-alive timer cleanly whenever user toggles the switch ON
                     if (currentSettings.keepAliveEnabled && !lastKeepAliveEnabled) {
                         lastAudioActivityMs = nowMs
                     }
@@ -269,6 +284,7 @@ class NoiseMonitorService : Service() {
                         val keepAliveMs = currentSettings.keepAliveIntervalMin.coerceAtLeast(1) * 60_000L
                         if (nowMs - lastAudioActivityMs >= keepAliveMs) {
                             lastAudioActivityMs = nowMs
+                            keepAliveMuteUntilMs = nowMs + KEEP_ALIVE_TAIL_MUTE_MS
                             alertPlayer.playKeepAlive(currentSettings.keepAliveAudioUri)
                         }
                     }
@@ -419,6 +435,7 @@ class NoiseMonitorService : Service() {
         const val CHANNEL_ID = "noise_watch_monitor"
         const val NOTIFICATION_ID = 1001
         const val CSV_EXPORT_INTERVAL_MS = 5 * 60 * 1000L
+        const val KEEP_ALIVE_TAIL_MUTE_MS = 600L
         const val MAX_STORED_EVENTS = 500
 
         const val ACTION_START = "com.noisewatch.android.START"

@@ -34,9 +34,14 @@ class AlertPlayer(private val context: Context) {
     private val _isPlaying = MutableStateFlow(false)
     val isPlaying: StateFlow<Boolean> = _isPlaying.asStateFlow()
 
+    @Volatile
+    var isKeepAlivePlaying: Boolean = false
+        private set
+
     @Synchronized
     fun play(customAudioUri: String?) {
         stop()
+        isKeepAlivePlaying = false
         if (!customAudioUri.isNullOrBlank()) {
             val started = playCustomUri(Uri.parse(customAudioUri))
             if (started) return
@@ -48,6 +53,7 @@ class AlertPlayer(private val context: Context) {
     fun playKeepAlive(keepAliveAudioUri: String?, force: Boolean = false) {
         if (!force && _isPlaying.value) return
         stop()
+        isKeepAlivePlaying = true
         if (!keepAliveAudioUri.isNullOrBlank()) {
             val started = playCustomUri(Uri.parse(keepAliveAudioUri))
             if (started) return
@@ -104,6 +110,7 @@ class AlertPlayer(private val context: Context) {
             _isPlaying.value = true
             true
         } catch (_: Exception) {
+            isKeepAlivePlaying = false
             false
         }
     }
@@ -169,12 +176,14 @@ class AlertPlayer(private val context: Context) {
         } finally {
             releaseBuiltInTrack()
             _isPlaying.value = false
+            isKeepAlivePlaying = false
         }
     }
 
     @Synchronized
     fun stop() {
         _isPlaying.value = false
+        isKeepAlivePlaying = false
         try {
             mediaPlayer?.apply {
                 if (isPlaying) stop()
