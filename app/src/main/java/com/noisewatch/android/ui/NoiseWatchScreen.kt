@@ -545,31 +545,43 @@ fun NoiseWatchScreen(
                             shape = RoundedCornerShape(8.dp),
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Row(
+                            Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(horizontal = 12.dp, vertical = 8.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
-                                Text(
-                                    text = if (state.isMonitoring && rem != null) {
-                                        s.keepAliveCountdownLabel
-                                    } else {
-                                        s.keepAliveWaitingLabel
-                                    },
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.onSecondaryContainer
-                                )
-                                if (state.isMonitoring && rem != null) {
-                                    val mins = rem / 60
-                                    val secs = rem % 60
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
                                     Text(
-                                        text = String.format(Locale.US, "%02d:%02d", mins, secs),
-                                        style = MaterialTheme.typography.titleSmall,
-                                        fontFamily = FontFamily.Monospace,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.primary
+                                        text = if (state.isMonitoring && rem != null) {
+                                            s.keepAliveCountdownLabel
+                                        } else {
+                                            s.keepAliveWaitingLabel
+                                        },
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSecondaryContainer
+                                    )
+                                    if (state.isMonitoring && rem != null) {
+                                        val mins = rem / 60
+                                        val secs = rem % 60
+                                        Text(
+                                            text = String.format(Locale.US, "%02d:%02d", mins, secs),
+                                            style = MaterialTheme.typography.titleSmall,
+                                            fontFamily = FontFamily.Monospace,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                }
+                                if (state.keepAliveLastStatus != null) {
+                                    Text(
+                                        text = "#${state.keepAlivePlayCount} · ${state.keepAliveLastStatus}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSecondaryContainer
                                     )
                                 }
                             }

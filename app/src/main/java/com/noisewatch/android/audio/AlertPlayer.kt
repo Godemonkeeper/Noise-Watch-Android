@@ -6,30 +6,38 @@ import android.media.AudioFormat
 import android.media.AudioTrack
 import android.media.MediaPlayer
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.io.File
 import kotlin.math.PI
 import kotlin.math.exp
 import kotlin.math.sin
 
 /**
- * Plays either a user-selected local audio file (via SAF Uri) or a built-in synthesized chime.
- * Also provides playKeepAlive() supporting a custom keep-alive audio file or built-in soft pulse.
- * Uses USAGE_MEDIA + CONTENT_TYPE_MUSIC so audio routes strictly to the active output device
- * (e.g., Bluetooth speaker) instead of dual-playing through the phone speaker and Bluetooth.
+ * Plays either a user-selected local audio file (copied to app storage or SAF Uri)
+ * or a built-in synthesized tone via AudioTrack MODE_STREAM (reliable on Bluetooth A2DP).
+ * Includes a completion watchdog so isPlaying can never get stuck true.
  */
 class AlertPlayer(private val context: Context) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val mainHandler = Handler(Looper.getMainLooper())
+
     private var mediaPlayer: MediaPlayer? = null
     private var builtInJob: Job? = null
+    private var watchdogJob: Job? = null
     private var audioTrack: AudioTrack? = null
+    private var playGeneration: Long = 0L
 
     private val _isPlaying = MutableStateFlow(false)
     val isPlaying: StateFlow<Boolean> = _isPlaying.asStateFlow()
@@ -39,34 +47,132 @@ class AlertPlayer(private val context: Context) {
         private set
 
     @Synchronized
-    fun play(customAudioUri: String?) {
+    fun play(customAudioSource: String?, onResult: ((String) -> Unit)? = null) {
         stop()
+        val gen = ++playGeneration
         isKeepAlivePlaying = false
-        if (!customAudioUri.isNullOrBlank()) {
-            val started = playCustomUri(Uri.parse(customAudioUri))
-            if (started) return
+        if (!customAudioSource.isNullOrBlank()) {
+            _isPlaying.value = true
+            mainHandler.post {
+                startCustomSourceOnMain(
+                    gen = gen,
+                    source = customAudioSource,
+                    fallbackToKeepAlivePulse = false,
+                    onResult = onResult
+                )
+            }
+            return
         }
-        playBuiltInChime()
+        playBuiltInChime(gen, onResult)
     }
 
     @Synchronized
-    fun playKeepAlive(keepAliveAudioUri: String?, force: Boolean = false) {
-        if (!force && _isPlaying.value) return
-        stop()
-        isKeepAlivePlaying = true
-        if (!keepAliveAudioUri.isNullOrBlank()) {
-            val started = playCustomUri(Uri.parse(keepAliveAudioUri))
-            if (started) return
+    fun playKeepAlive(
+        keepAliveAudioSource: String?,
+        force: Boolean = false,
+        onResult: ((String) -> Unit)? = null
+    ) {
+        if (!force && _isPlaying.value) {
+            onResult?.invoke("Skipped (audio busy)")
+            return
         }
-        playKeepAlivePulse()
+        stop()
+        val gen = ++playGeneration
+        isKeepAlivePlaying = true
+        if (!keepAliveAudioSource.isNullOrBlank()) {
+            _isPlaying.value = true
+            mainHandler.post {
+                startCustomSourceOnMain(
+                    gen = gen,
+                    source = keepAliveAudioSource,
+                    fallbackToKeepAlivePulse = true,
+                    onResult = onResult
+                )
+            }
+            return
+        }
+        playKeepAlivePulse(gen, onResult)
+    }
+
+    @Synchronized
+    private fun startCustomSourceOnMain(
+        gen: Long,
+        source: String,
+        fallbackToKeepAlivePulse: Boolean,
+        onResult: ((String) -> Unit)?
+    ) {
+        if (gen != playGeneration) return
+        try {
+            val mp = MediaPlayer().apply {
+                setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                        .build()
+                )
+                val localFile = File(source)
+                if (localFile.exists() && localFile.isFile) {
+                    setDataSource(localFile.absolutePath)
+                } else {
+                    setDataSource(context, Uri.parse(source))
+                }
+                setOnCompletionListener {
+                    stopIfGeneration(gen)
+                }
+                setOnErrorListener { _, _, _ ->
+                    stopIfGeneration(gen)
+                    true
+                }
+                prepare()
+                start()
+            }
+            mediaPlayer = mp
+            _isPlaying.value = true
+            onResult?.invoke("Custom file")
+            startMediaPlayerWatchdog(gen, mp)
+        } catch (e: Exception) {
+            mediaPlayer = null
+            val reason = e.javaClass.simpleName
+            if (gen == playGeneration) {
+                if (fallbackToKeepAlivePulse) {
+                    onResult?.invoke("Fallback pulse ($reason)")
+                    playKeepAlivePulse(gen, null)
+                } else {
+                    onResult?.invoke("Fallback chime ($reason)")
+                    playBuiltInChime(gen, null)
+                }
+            }
+        }
+    }
+
+    private fun startMediaPlayerWatchdog(gen: Long, mp: MediaPlayer) {
+        watchdogJob?.cancel()
+        watchdogJob = scope.launch {
+            val maxWaitMs = runCatching {
+                val dur = mp.duration
+                if (dur > 0) (dur + 2000L).coerceAtMost(120_000L) else 30_000L
+            }.getOrDefault(30_000L)
+
+            val startMs = System.currentTimeMillis()
+            delay(300L)
+            while (isActive && gen == playGeneration) {
+                val stillPlaying = runCatching { mp.isPlaying }.getOrDefault(false)
+                if (!stillPlaying || (System.currentTimeMillis() - startMs) >= maxWaitMs) {
+                    stopIfGeneration(gen)
+                    break
+                }
+                delay(250L)
+            }
+        }
     }
 
     /**
-     * Plays a 1.0s gentle pulse (440 Hz @ 30% amplitude) — long enough to survive
-     * Bluetooth A2DP wake-up latency without startling the user.
+     * Plays a 1.0s gentle pulse (440 Hz @ 35% amplitude) using MODE_STREAM
+     * for reliable Bluetooth A2DP playback across all Android devices.
      */
-    private fun playKeepAlivePulse() {
+    private fun playKeepAlivePulse(gen: Long, onResult: ((String) -> Unit)?) {
         _isPlaying.value = true
+        onResult?.invoke("Built-in pulse")
         builtInJob = scope.launch {
             val sampleRate = 44100
             val durationSec = 1.0
@@ -76,47 +182,19 @@ class AlertPlayer(private val context: Context) {
             for (i in 0 until numSamples) {
                 val t = i.toDouble() / sampleRate
                 val env = sin(PI * t / durationSec)
-                val sample = sin(2.0 * PI * 440.0 * t) * env * 0.30
+                val sample = sin(2.0 * PI * 440.0 * t) * env * 0.35
                 pcm[i] = (sample * Short.MAX_VALUE).toInt()
                     .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
                     .toShort()
             }
 
-            playPcmStatic(sampleRate, pcm, 1100L)
+            playPcmStream(gen, sampleRate, pcm)
         }
     }
 
-    private fun playCustomUri(uri: Uri): Boolean {
-        return try {
-            val mp = MediaPlayer().apply {
-                setAudioAttributes(
-                    AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_MEDIA)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                        .build()
-                )
-                setDataSource(context, uri)
-                setOnCompletionListener {
-                    stop()
-                }
-                setOnErrorListener { _, _, _ ->
-                    stop()
-                    true
-                }
-                prepare()
-                start()
-            }
-            mediaPlayer = mp
-            _isPlaying.value = true
-            true
-        } catch (_: Exception) {
-            isKeepAlivePlaying = false
-            false
-        }
-    }
-
-    private fun playBuiltInChime() {
+    private fun playBuiltInChime(gen: Long, onResult: ((String) -> Unit)?) {
         _isPlaying.value = true
+        onResult?.invoke("Built-in chime")
         builtInJob = scope.launch {
             val sampleRate = 44100
             val durationSec = 1.2
@@ -135,17 +213,18 @@ class AlertPlayer(private val context: Context) {
                     .toShort()
             }
 
-            playPcmStatic(sampleRate, pcm, 1300L)
+            playPcmStream(gen, sampleRate, pcm)
         }
     }
 
-    private fun playPcmStatic(sampleRate: Int, pcm: ShortArray, waitMs: Long) {
+    private fun playPcmStream(gen: Long, sampleRate: Int, pcm: ShortArray) {
         try {
             val minBuf = AudioTrack.getMinBufferSize(
                 sampleRate,
                 AudioFormat.CHANNEL_OUT_MONO,
                 AudioFormat.ENCODING_PCM_16BIT
-            )
+            ).coerceAtLeast(4096)
+
             val track = AudioTrack.Builder()
                 .setAudioAttributes(
                     AudioAttributes.Builder()
@@ -160,30 +239,57 @@ class AlertPlayer(private val context: Context) {
                         .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
                         .build()
                 )
-                .setBufferSizeInBytes(maxOf(minBuf, pcm.size * 2))
-                .setTransferMode(AudioTrack.MODE_STATIC)
+                .setBufferSizeInBytes(minBuf * 2)
+                .setTransferMode(AudioTrack.MODE_STREAM)
                 .build()
 
-            audioTrack = track
-            track.write(pcm, 0, pcm.size)
-            track.play()
+            synchronized(this) {
+                if (gen != playGeneration) {
+                    track.release()
+                    return
+                }
+                audioTrack = track
+            }
 
-            val startMs = System.currentTimeMillis()
-            while (_isPlaying.value && System.currentTimeMillis() - startMs < waitMs) {
-                Thread.sleep(50L)
+            track.play()
+            var offset = 0
+            val chunkSize = 2048
+            while (offset < pcm.size && _isPlaying.value && gen == playGeneration) {
+                val count = minOf(chunkSize, pcm.size - offset)
+                val written = track.write(pcm, offset, count)
+                if (written <= 0) break
+                offset += written
+            }
+            // Wait briefly for hardware buffer drain
+            if (_isPlaying.value && gen == playGeneration) {
+                Thread.sleep(150L)
             }
         } catch (_: Exception) {
         } finally {
-            releaseBuiltInTrack()
-            _isPlaying.value = false
-            isKeepAlivePlaying = false
+            synchronized(this) {
+                releaseBuiltInTrack()
+                if (gen == playGeneration) {
+                    _isPlaying.value = false
+                    isKeepAlivePlaying = false
+                }
+            }
+        }
+    }
+
+    @Synchronized
+    private fun stopIfGeneration(gen: Long) {
+        if (gen == playGeneration) {
+            stop()
         }
     }
 
     @Synchronized
     fun stop() {
+        playGeneration++
         _isPlaying.value = false
         isKeepAlivePlaying = false
+        watchdogJob?.cancel()
+        watchdogJob = null
         try {
             mediaPlayer?.apply {
                 if (isPlaying) stop()

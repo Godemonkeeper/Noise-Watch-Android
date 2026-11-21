@@ -75,6 +75,8 @@ data class MonitorState(
     val isAlertPlaying: Boolean = false,
     val isEnhancedAlertActive: Boolean = false,
     val keepAliveRemainingSec: Int? = null,
+    val keepAlivePlayCount: Int = 0,
+    val keepAliveLastStatus: String? = null,
     val levels: BandLevels = BandLevels(),
     val effectiveDb: Float = -100f,
     val activeHitsInWindow: Int = 0,

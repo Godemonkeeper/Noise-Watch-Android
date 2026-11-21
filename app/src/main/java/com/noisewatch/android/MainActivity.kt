@@ -29,9 +29,12 @@ import com.noisewatch.android.service.NoiseMonitorService
 import com.noisewatch.android.storage.EventExporter
 import com.noisewatch.android.storage.SettingsRepository
 import com.noisewatch.android.ui.NoiseWatchScreen
+import java.io.File
 
-private enum class AudioPickTarget {
-    NORMAL, ENHANCED, KEEP_ALIVE
+private enum class AudioPickTarget(val localFileName: String) {
+    NORMAL("normal_alert_audio"),
+    ENHANCED("enhanced_alert_audio"),
+    KEEP_ALIVE("keep_alive_audio")
 }
 
 class MainActivity : ComponentActivity() {
@@ -88,17 +91,19 @@ class MainActivity : ComponentActivity() {
                             )
                         }
                         val displayName = resolveDisplayName(uri) ?: uri.lastPathSegment ?: "audio"
+                        // Copy picked audio into app internal storage so background Service always has read access
+                        val storedSource = copyAudioToInternal(uri, pickTarget.localFileName) ?: uri.toString()
                         val updated = when (pickTarget) {
                             AudioPickTarget.NORMAL -> settings.copy(
-                                customAudioUri = uri.toString(),
+                                customAudioUri = storedSource,
                                 customAudioName = displayName
                             )
                             AudioPickTarget.ENHANCED -> settings.copy(
-                                enhancedAudioUri = uri.toString(),
+                                enhancedAudioUri = storedSource,
                                 enhancedAudioName = displayName
                             )
                             AudioPickTarget.KEEP_ALIVE -> settings.copy(
-                                keepAliveAudioUri = uri.toString(),
+                                keepAliveAudioUri = storedSource,
                                 keepAliveAudioName = displayName
                             )
                         }
@@ -184,6 +189,19 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
+    }
+
+    private fun copyAudioToInternal(uri: Uri, fileName: String): String? {
+        return runCatching {
+            val dir = File(filesDir, "alerts").apply { mkdirs() }
+            val target = File(dir, fileName)
+            contentResolver.openInputStream(uri)?.use { input ->
+                target.outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            } ?: return null
+            target.absolutePath
+        }.getOrNull()
     }
 
     private fun sendServiceAction(action: String, foreground: Boolean) {

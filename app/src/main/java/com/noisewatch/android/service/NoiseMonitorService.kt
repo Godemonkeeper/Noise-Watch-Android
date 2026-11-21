@@ -18,6 +18,7 @@ import android.media.MediaRecorder
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
@@ -41,17 +42,27 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class NoiseMonitorService : Service() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var monitorJob: Job? = null
+    private var keepAliveJob: Job? = null
     private var csvJob: Job? = null
     private var alertObserverJob: Job? = null
     private var wakeLock: PowerManager.WakeLock? = null
 
     @Volatile
     private var activeAudioRecord: AudioRecord? = null
+
+    @Volatile
+    private var lastAudioActivityElapsedMs: Long = 0L
+
+    @Volatile
+    private var keepAliveMuteUntilElapsedMs: Long = 0L
 
     private lateinit var settingsRepo: SettingsRepository
     private lateinit var exporter: EventExporter
@@ -60,6 +71,7 @@ class NoiseMonitorService : Service() {
     private val escalationTracker = AlertEscalationTracker()
     private val allEvents = mutableListOf<TriggerEvent>()
     private var nextEventId = 1L
+    private val timeFmt = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
 
     override fun onCreate() {
         super.onCreate()
@@ -95,7 +107,16 @@ class NoiseMonitorService : Service() {
                 alertPlayer.play(s.enhancedAudioUri ?: s.customAudioUri)
             }
             ACTION_TEST_KEEP_ALIVE_ALERT -> {
-                alertPlayer.playKeepAlive(MonitorStateHolder.settings.value.keepAliveAudioUri, force = true)
+                keepAliveMuteUntilElapsedMs = SystemClock.elapsedRealtime() + KEEP_ALIVE_TAIL_MUTE_MS
+                alertPlayer.playKeepAlive(
+                    keepAliveAudioSource = MonitorStateHolder.settings.value.keepAliveAudioUri,
+                    force = true
+                ) { result ->
+                    val ts = synchronized(timeFmt) { timeFmt.format(Date()) }
+                    MonitorStateHolder.updateState {
+                        it.copy(keepAliveLastStatus = "$ts · $result")
+                    }
+                }
             }
             ACTION_EXPORT_CSV -> exportCsvNow()
         }
@@ -123,12 +144,16 @@ class NoiseMonitorService : Service() {
         acquireWakeLock()
         ruleEvaluator.reset()
         escalationTracker.reset()
+        lastAudioActivityElapsedMs = SystemClock.elapsedRealtime()
+        keepAliveMuteUntilElapsedMs = 0L
 
         MonitorStateHolder.updateState {
             it.copy(
                 isMonitoring = true,
                 isEnhancedAlertActive = false,
                 keepAliveRemainingSec = null,
+                keepAlivePlayCount = 0,
+                keepAliveLastStatus = null,
                 errorMessage = null
             )
         }
@@ -137,11 +162,73 @@ class NoiseMonitorService : Service() {
             runAudioLoop()
         }
 
+        keepAliveJob = serviceScope.launch {
+            runKeepAliveLoop()
+        }
+
         csvJob = serviceScope.launch {
             while (currentCoroutineContext().isActive) {
                 delay(CSV_EXPORT_INTERVAL_MS)
                 exportCsvNow()
             }
+        }
+    }
+
+    /**
+     * Dedicated monotonic timer loop for Bluetooth speaker keep-alive,
+     * decoupled from AudioRecord.read() so countdown and playback fire on time.
+     */
+    private suspend fun runKeepAliveLoop() {
+        var lastEnabled = MonitorStateHolder.settings.value.keepAliveEnabled
+        var lastIntervalMin = MonitorStateHolder.settings.value.keepAliveIntervalMin
+
+        while (currentCoroutineContext().isActive && MonitorStateHolder.state.value.isMonitoring) {
+            val s = MonitorStateHolder.settings.value
+            val nowElapsed = SystemClock.elapsedRealtime()
+
+            if (s.keepAliveEnabled && !lastEnabled) {
+                lastAudioActivityElapsedMs = nowElapsed
+            }
+            if (s.keepAliveIntervalMin != lastIntervalMin) {
+                lastIntervalMin = s.keepAliveIntervalMin
+            }
+            lastEnabled = s.keepAliveEnabled
+
+            if (s.keepAliveEnabled) {
+                val intervalMs = s.keepAliveIntervalMin.coerceAtLeast(1) * 60_000L
+                val elapsed = nowElapsed - lastAudioActivityElapsedMs
+
+                if (elapsed >= intervalMs) {
+                    // Always reset timer and fire keep-alive (force=true prevents stale isPlaying from blocking)
+                    lastAudioActivityElapsedMs = nowElapsed
+                    keepAliveMuteUntilElapsedMs = nowElapsed + KEEP_ALIVE_TAIL_MUTE_MS
+                    alertPlayer.playKeepAlive(
+                        keepAliveAudioSource = s.keepAliveAudioUri,
+                        force = true
+                    ) { result ->
+                        val ts = synchronized(timeFmt) { timeFmt.format(Date()) }
+                        MonitorStateHolder.updateState { current ->
+                            current.copy(
+                                keepAlivePlayCount = current.keepAlivePlayCount + 1,
+                                keepAliveLastStatus = "$ts · $result"
+                            )
+                        }
+                    }
+                }
+
+                val remMs = (intervalMs - (nowElapsed - lastAudioActivityElapsedMs)).coerceAtLeast(0L)
+                val remSec = ((remMs + 999L) / 1000L).toInt()
+                MonitorStateHolder.updateState { current ->
+                    if (!current.isMonitoring) current else current.copy(keepAliveRemainingSec = remSec)
+                }
+            } else {
+                MonitorStateHolder.updateState { current ->
+                    if (current.keepAliveRemainingSec == null) current
+                    else current.copy(keepAliveRemainingSec = null)
+                }
+            }
+
+            delay(250L)
         }
     }
 
@@ -201,9 +288,6 @@ class NoiseMonitorService : Service() {
         val buffer = ShortArray(fftAnalyzer.fftSize)
         var lastDeviceId = MonitorStateHolder.settings.value.selectedDeviceId
         var lastJsonWriteMs = 0L
-        var lastAudioActivityMs = System.currentTimeMillis()
-        var lastKeepAliveEnabled = MonitorStateHolder.settings.value.keepAliveEnabled
-        var keepAliveMuteUntilMs = 0L
 
         try {
             audioRecord.startRecording()
@@ -223,11 +307,12 @@ class NoiseMonitorService : Service() {
                     val levels = fftAnalyzer.analyze(buffer, read)
                     val effectiveDb = levels.effectiveDb(currentSettings.selectedBands)
                     val nowMs = System.currentTimeMillis()
+                    val nowElapsed = SystemClock.elapsedRealtime()
 
                     if (alertPlayer.isKeepAlivePlaying) {
-                        keepAliveMuteUntilMs = nowMs + KEEP_ALIVE_TAIL_MUTE_MS
+                        keepAliveMuteUntilElapsedMs = nowElapsed + KEEP_ALIVE_TAIL_MUTE_MS
                     }
-                    val suppressDetection = alertPlayer.isKeepAlivePlaying || nowMs < keepAliveMuteUntilMs
+                    val suppressDetection = alertPlayer.isKeepAlivePlaying || nowElapsed < keepAliveMuteUntilElapsedMs
 
                     val eval = if (suppressDetection) {
                         EvaluationResult(
@@ -240,13 +325,8 @@ class NoiseMonitorService : Service() {
                     }
                     val isEnhancedMode = escalationTracker.update(nowMs, eval.triggered)
 
-                    if (currentSettings.keepAliveEnabled && !lastKeepAliveEnabled) {
-                        lastAudioActivityMs = nowMs
-                    }
-                    lastKeepAliveEnabled = currentSettings.keepAliveEnabled
-
                     if (eval.triggered) {
-                        val targetUri = if (isEnhancedMode) {
+                        val targetSource = if (isEnhancedMode) {
                             currentSettings.enhancedAudioUri ?: currentSettings.customAudioUri
                         } else {
                             currentSettings.customAudioUri
@@ -278,23 +358,8 @@ class NoiseMonitorService : Service() {
                                 allEvents.removeAt(allEvents.lastIndex)
                             }
                         }
-                        lastAudioActivityMs = nowMs
-                        alertPlayer.play(targetUri)
-                    } else if (currentSettings.keepAliveEnabled && !alertPlayer.isPlaying.value) {
-                        val keepAliveMs = currentSettings.keepAliveIntervalMin.coerceAtLeast(1) * 60_000L
-                        if (nowMs - lastAudioActivityMs >= keepAliveMs) {
-                            lastAudioActivityMs = nowMs
-                            keepAliveMuteUntilMs = nowMs + KEEP_ALIVE_TAIL_MUTE_MS
-                            alertPlayer.playKeepAlive(currentSettings.keepAliveAudioUri)
-                        }
-                    }
-
-                    val keepAliveRemainingSec = if (currentSettings.keepAliveEnabled) {
-                        val keepAliveMs = currentSettings.keepAliveIntervalMin.coerceAtLeast(1) * 60_000L
-                        val remMs = (keepAliveMs - (nowMs - lastAudioActivityMs)).coerceAtLeast(0L)
-                        ((remMs + 999L) / 1000L).toInt()
-                    } else {
-                        null
+                        lastAudioActivityElapsedMs = nowElapsed
+                        alertPlayer.play(targetSource)
                     }
 
                     val snapshotEvents = synchronized(allEvents) { allEvents.take(50) }
@@ -304,7 +369,6 @@ class NoiseMonitorService : Service() {
                         } else {
                             current.copy(
                                 isEnhancedAlertActive = isEnhancedMode,
-                                keepAliveRemainingSec = keepAliveRemainingSec,
                                 levels = levels,
                                 effectiveDb = effectiveDb,
                                 activeHitsInWindow = eval.activeHitsInWindow,
@@ -364,6 +428,8 @@ class NoiseMonitorService : Service() {
             )
         }
         escalationTracker.reset()
+        keepAliveJob?.cancel()
+        keepAliveJob = null
         monitorJob?.cancel()
         monitorJob = null
         csvJob?.cancel()
@@ -435,7 +501,7 @@ class NoiseMonitorService : Service() {
         const val CHANNEL_ID = "noise_watch_monitor"
         const val NOTIFICATION_ID = 1001
         const val CSV_EXPORT_INTERVAL_MS = 5 * 60 * 1000L
-        const val KEEP_ALIVE_TAIL_MUTE_MS = 600L
+        const val KEEP_ALIVE_TAIL_MUTE_MS = 800L
         const val MAX_STORED_EVENTS = 500
 
         const val ACTION_START = "com.noisewatch.android.START"
